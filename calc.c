@@ -21,7 +21,8 @@
 #define STUDENT_ID "251adb244"
 
 //I use these tokens with names, so the tokenizer and parser can differentiate the numbers, operators, end of lnes and bad inputs
-enum { T_INT, T_PLUS, T_MINUS, T_END, T_BAD };
+// i have added two tokens, since the parser need also wrok with multiolication and division
+enum { T_INT, T_PLUS, T_MINUS, T_STAR, T_SLASH, T_END, T_BAD };
 
 
 //I made it global, so the different functions can process the same input consistently, like input buffer, tokenizer state, and error infromation
@@ -67,6 +68,9 @@ static void next_token(void) {
     char c = buf[p];
     if (c == '+') { tok = T_PLUS; p++; }
     else if (c == '-') { tok = T_MINUS; p++; }
+    //  i add it, because last version had only for minus and plus
+    else if (c == '*') { tok = T_STAR; p++; }
+else if (c == '/') { tok = T_SLASH; p++; }
     else if (isdigit((unsigned char)c)) {
         //I build number digit by digit, because the input contains some text
         tok_int = 0;
@@ -79,6 +83,31 @@ static void next_token(void) {
     //i mark any other charactrs aas bad, so parser can report error instead of treating it as valid token
     else { tok = T_BAD; p++; }  
 }
+
+static Value parse_primary(void);
+
+//i made separate function for multiplication and division ,so they can be calculated before addition and subtraction
+static Value parse_term(void) {
+    Value left = parse_primary();
+    if (failed) return left;
+    while (tok == T_STAR || tok == T_SLASH) {
+        int op = tok;
+        next_token();
+        Value right = parse_primary();
+        if (failed) return left;
+        if (op == T_STAR) {
+            left.i = left.i * right.i;
+        } else {
+            if (right.i == 0) {//division by zero not allowed
+                fail(right.start);
+                return left;
+            }
+            left.i = left.i / right.i;
+        }
+    }
+    return left;
+}
+
 
 // I handle single number, so the parse_expr can then focus on combining numbers witg operators
 static Value parse_primary(void) {
@@ -99,15 +128,16 @@ static Value parse_primary(void) {
 
 
 //i process additions and subtractions from left to right using value already calculated as the left side of the next operation
+//and also i changed it to use the parse_term, so the * and / can be used before + and -
 static Value parse_expr(void) {
-    Value left = parse_primary();
+    Value left = parse_term();
     if (failed) return left;
 
     //I keep processing while there is another plus or minus, so expressions with several operations can be managed
     while (tok == T_PLUS || tok == T_MINUS) {
         int op = tok;
         next_token();
-        Value right = parse_primary();
+        Value right = parse_term();
         if (failed) return left;
 
          //I check which operator was saved before reading the next number, because next_token changes the current token
