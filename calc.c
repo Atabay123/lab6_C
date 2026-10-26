@@ -22,7 +22,8 @@
 
 //I use these tokens with names, so the tokenizer and parser can differentiate the numbers, operators, end of lnes and bad inputs
 // i have added two tokens, since the parser need also wrok with multiolication and division
-enum { T_INT, T_PLUS, T_MINUS, T_STAR, T_SLASH, T_END, T_BAD };
+//added two more tokens to work with parenthesises
+enum { T_INT, T_PLUS, T_MINUS, T_STAR, T_SLASH, T_LP, T_RP, T_END, T_BAD };
 
 
 //I made it global, so the different functions can process the same input consistently, like input buffer, tokenizer state, and error infromation
@@ -71,6 +72,8 @@ static void next_token(void) {
     //  i add it, because last version had only for minus and plus
     else if (c == '*') { tok = T_STAR; p++; }
 else if (c == '/') { tok = T_SLASH; p++; }
+else if (c == '(') { tok = T_LP; p++; } //i add it, so can work with parentheses
+else if (c == ')') { tok = T_RP; p++; }
     else if (isdigit((unsigned char)c)) {
         //I build number digit by digit, because the input contains some text
         tok_int = 0;
@@ -107,19 +110,29 @@ static Value parse_term(void) {
     }
     return left;
 }
-
+static Value parse_expr(void);
 
 // I handle single number, so the parse_expr can then focus on combining numbers witg operators
 static Value parse_primary(void) {
     Value v = {0};
+    long start = tok_pos;
     //need to remember where this starte in case if it will be needed later
-    v.start = tok_pos;
+    v.start = start;
     if (tok == T_INT) {
         v.i = tok_int;
         next_token();
+    } else if (tok == T_LP) { //if there is new parenthesis, need work with it first
+    next_token();
+    v = parse_expr();
+    if (failed) return v;
+
+    v.start = start;
+    if (tok == T_RP) {
+        next_token();
     } else {
-       
-        //i report an error when number is expected, but current token not number
+        fail(tok_pos);
+    }
+} else {
         fail(tok_pos);
     }
     return v;
