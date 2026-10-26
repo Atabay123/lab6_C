@@ -23,7 +23,8 @@
 //I use these tokens with names, so the tokenizer and parser can differentiate the numbers, operators, end of lnes and bad inputs
 // i have added two tokens, since the parser need also wrok with multiolication and division
 //added two more tokens to work with parenthesises
-enum { T_INT, T_PLUS, T_MINUS, T_STAR, T_SLASH, T_LP, T_RP, T_END, T_BAD };
+//i have added one more token, so can work with power
+enum { T_INT, T_PLUS, T_MINUS, T_STAR, T_SLASH, T_POW, T_LP, T_RP, T_END, T_BAD };
 
 
 //I made it global, so the different functions can process the same input consistently, like input buffer, tokenizer state, and error infromation
@@ -70,9 +71,15 @@ static void next_token(void) {
     if (c == '+') { tok = T_PLUS; p++; }
     else if (c == '-') { tok = T_MINUS; p++; }
     //  i add it, because last version had only for minus and plus
-    else if (c == '*') { tok = T_STAR; p++; }
+    else if (c == '*') {
+    if (p + 1 < line_end && buf[p + 1] == '*') {
+        tok = T_POW;
+        p += 2;
+    }
+    else { tok = T_STAR; p++; }
+}// this done, in order to make rogram differentiate between multiplication and power
 else if (c == '/') { tok = T_SLASH; p++; }
-else if (c == '(') { tok = T_LP; p++; } //i add it, so can work with parentheses
+else if (c == '(') { tok = T_LP; p++; } //i add it, so can work with parentheses, i got some idea from Google AI Studio
 else if (c == ')') { tok = T_RP; p++; }
     else if (isdigit((unsigned char)c)) {
         //I build number digit by digit, because the input contains some text
@@ -88,15 +95,15 @@ else if (c == ')') { tok = T_RP; p++; }
 }
 
 static Value parse_primary(void);
-
+static Value parse_power(void);
 //i made separate function for multiplication and division ,so they can be calculated before addition and subtraction
 static Value parse_term(void) {
-    Value left = parse_primary();
+    Value left = parse_power();
     if (failed) return left;
     while (tok == T_STAR || tok == T_SLASH) {
         int op = tok;
         next_token();
-        Value right = parse_primary();
+        Value right = parse_power();
         if (failed) return left;
         if (op == T_STAR) {
             left.i = left.i * right.i;
@@ -138,6 +145,33 @@ static Value parse_primary(void) {
     return v;
 }
 
+static long long int_pow(long long base, long long exp) {
+    long long result = 1;
+    while (exp > 0) {
+        if (exp & 1) result = result * base;
+        exp = exp >> 1;
+        if (exp > 0) base = base * base;
+    }
+    return result;
+}// added to do the power
+
+
+//it works with power, makes power rigth associative
+static Value parse_power(void) {
+    Value left = parse_primary();
+    if (failed) return left;
+    if (tok == T_POW) {
+        next_token();
+        Value right = parse_power();
+        if (failed) return left;
+        if (right.i < 0) {
+            fail(right.start);
+            return left;
+        }
+        left.i = int_pow(left.i, right.i);
+    }
+    return left;
+}
 
 
 //i process additions and subtractions from left to right using value already calculated as the left side of the next operation
@@ -239,13 +273,19 @@ static int process_file(const char *in_path, const char *out_dir) {
     failed = 0;
     long cursor = 0;
     while (cursor < len && !failed) {
-        long start = cursor;
-        while (cursor < len && buf[cursor] != '\n') cursor++;
+    long start = cursor;
+     while (cursor < len && buf[cursor] != '\n') cursor++;
         line_end = cursor;
-        if (cursor < len) cursor++;  
-        p = start;
-        next_token();
-        Value v = parse_expr();
+     if (cursor < len) cursor++;
+
+    long k = start;
+     while (k < line_end && (buf[k] == ' ' || buf[k] == '\t')) k++;
+
+     if (k == line_end || buf[k] == '#') continue;
+
+     p = start;
+      next_token();
+     Value v = parse_expr();
 
         if (!failed && tok != T_END) fail(tok_pos);
         if (failed) break;
