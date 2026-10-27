@@ -1,7 +1,7 @@
 // Atabay Atabaev 251ADB244
 // https://github.com/Atabay123/lab6_C.git
 // Compile with: gcc -O2 -Wall -Wextra -std=c17 -o calc calc.c -lm
-// Resources used: I am using Google AI Studio, chat link: 
+// Resources used: I am using Google AI Studio,it is used mainly to get some ideas. chat link: https://aistudio.google.com/app/prompts?state=%7B%22ids%22:%5B%2212OoP0RIum8R8akK1T1E9vFyjxqveXuME%22%5D,%22action%22:%22open%22,%22userId%22:%22118435027073479122369%22,%22resourceKeys%22:%7B%7D%7D&usp=sharing
 
 //here i define the POSIX interface, so below I can use POSIX declarations 
 #define _POSIX_C_SOURCE 200809L
@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <dirent.h> //this i add, because it is needed to work with directories
+#include <math.h> // added to use it for math
 
 //these will be reused, so thats why I keep it here in one place
 #define FIRST_NAME "atabay"
@@ -25,7 +26,10 @@
 // i have added two tokens, since the parser need also wrok with multiolication and division
 //added two more tokens to work with parenthesises
 //i have added one more token, so can work with power
-enum { T_INT, T_PLUS, T_MINUS, T_STAR, T_SLASH, T_POW, T_LP, T_RP, T_END, T_BAD };
+enum { T_INT, T_FLOAT , T_PLUS, T_MINUS, T_STAR, T_SLASH, T_POW, T_LP, T_RP, T_END, T_BAD };
+
+
+//in this program to keep it work in linear O(n) time we load the whole file into one buffer 'buf', so there is no duplicate or copyings.
 
 
 //I made it global, so the different functions can process the same input consistently, like input buffer, tokenizer state, and error infromation
@@ -38,10 +42,15 @@ static long tok_pos;
 static long long tok_int;
 static int failed;     
 static long fail_pos;
+static double tok_float;
 
+
+//I saved start here because for errors like dividing by zero or negative power task asks to keep the position where the right operand started, not where calculation ended
 typedef struct {
     long long i;
     long start; 
+    int is_float;
+    double f;
 } Value;
 
 
@@ -53,7 +62,9 @@ static void fail(long pos) {
     }
 }
 //I asked AI Google AI Studio, like to give some idea to do tokenizer
-
+//if line ends early like "3 *" or "(1 + 2" it hits p >= line_end.
+//i set tok_pos = line_end + 1, because the missing operand error should be reported
+// at the newline character ot file length + 1 if last line has no newline
 //i read next token here so parser can work with numbers and operators instead of checking every character itself
 static void next_token(void) {
     //I skip spaces and tabs here, since they should not impact the expression
@@ -84,12 +95,27 @@ static void next_token(void) {
      else if (c == ')') { tok = T_RP; p++; }
     else if (isdigit((unsigned char)c)) {
         //I build number digit by digit, because the input contains some text
-        tok_int = 0;
-        while (p < line_end && isdigit((unsigned char)buf[p])) {
-            tok_int = tok_int * 10 + (buf[p] - '0');
-            p++;
-        }
-        tok = T_INT;
+long start = p;
+while (p < line_end && isdigit((unsigned char)buf[p])) p++;
+
+
+//floats need digits before and after dot, so if there no digits after dot, i stop here, so the dot gets as bad token
+if (p + 1 < line_end && buf[p] == '.' &&
+    isdigit((unsigned char)buf[p + 1])) {
+    p++;
+    while (p < line_end && isdigit((unsigned char)buf[p])) p++;
+
+    char saved = buf[p];
+    buf[p] = '\0';
+    tok_float = strtod(buf + start, NULL);
+    buf[p] = saved;
+    tok = T_FLOAT;
+} else {
+    tok_int = 0;
+    for (long k = start; k < p; k++)
+        tok_int = tok_int * 10 + (buf[k] - '0');
+    tok = T_INT;
+}
     }
     //i mark any other charactrs aas bad, so parser can report error instead of treating it as valid token
     else { tok = T_BAD; p++; }  
@@ -97,28 +123,57 @@ static void next_token(void) {
 
 static Value parse_primary(void);
 static Value parse_power(void);
-//i made separate function for multiplication and division ,so they can be calculated before addition and subtraction
+static double to_double(Value v);
+
+//this function called by parse_expr(), so all * and / finish before + and - can satrt
+//and while loop runs left to right, it is needed to make left associative, for example 10/2/5 to (10/2)/5
+//And division by zero reports right.start, because error is caused by right number which is 0, so i point to start of that right number or its parenthesis
 static Value parse_term(void) {
     Value left = parse_power();
     if (failed) return left;
     while (tok == T_STAR || tok == T_SLASH) {
         int op = tok;
+        long op_pos = tok_pos;
         next_token();
         Value right = parse_power();
         if (failed) return left;
-        if (op == T_STAR) {
-            left.i = left.i * right.i;
+       if (op == T_SLASH && ((!right.is_float && right.i == 0) ||
+                              (right.is_float && right.f == 0.0))) {
+            fail(right.start);  
+            return left;
+        }
+        if (!left.is_float && !right.is_float) {
+            if (op == T_STAR) left.i = left.i * right.i;
+            else left.i = left.i / right.i;
         } else {
-            if (right.i == 0) {//division by zero not allowed
-                fail(right.start);
+            double a = to_double(left);
+            double b = to_double(right);
+            double r;
+            if (op == T_STAR) r = a * b;
+            else r = a / b;
+            if (isnan(r) || isinf(r)) {
+                fail(op_pos);
                 return left;
             }
-            left.i = left.i / right.i;
+            left.is_float = 1;
+            left.f = r;
         }
     }
     return left;
 }
+
+
 static Value parse_expr(void);
+
+//needed to work with decimal numbers
+//i use this fnction when need to work with both integers and decimals
+// if both numbers are integers, i keep them as long long, so i dont lose integer precision
+//but if one number is float, i need convert integer to double so the math will worok with decimals
+static double to_double(Value v) {
+    if (v.is_float) return v.f;
+    return (double)v.i;
+}
+
 
 // I handle single number, so the parse_expr can then focus on combining numbers witg operators
 static Value parse_primary(void) {
@@ -129,7 +184,11 @@ static Value parse_primary(void) {
     if (tok == T_INT) {
         v.i = tok_int;
         next_token();
-    } else if (tok == T_LP) { //if there is new parenthesis, need work with it first
+    }else if (tok == T_FLOAT) {
+    v.is_float = 1;
+    v.f = tok_float;
+    next_token();
+} else if (tok == T_LP) { //if there is new parenthesis, need work with it first
     next_token();
     v = parse_expr();
     if (failed) return v;
@@ -158,18 +217,32 @@ static long long int_pow(long long base, long long exp) {
 
 
 //it works with power, makes power rigth associative
+//this function calls itself for exponent, its needed to make correct groups, like 2**3**2 as 2**(3**2) == 512
 static Value parse_power(void) {
     Value left = parse_primary();
     if (failed) return left;
     if (tok == T_POW) {
+        long op_pos = tok_pos;
         next_token();
-        Value right = parse_power();
+        Value right = parse_power();//calls itself so power evaluates from right to left
         if (failed) return left;
-        if (right.i < 0) {
-            fail(right.start);
-            return left;
+
+        if (!left.is_float && !right.is_float) {
+            if (right.i < 0) {
+                fail(right.start);
+                return left;
+            }
+            left.i = int_pow(left.i, right.i);
+        } else {
+           
+            double r = pow(to_double(left), to_double(right));
+            if (isnan(r) || isinf(r)) {
+                fail(op_pos);  
+                return left;
+            }
+            left.is_float = 1;
+            left.f = r;
         }
-        left.i = int_pow(left.i, right.i);
     }
     return left;
 }
@@ -184,18 +257,34 @@ static Value parse_expr(void) {
     //I keep processing while there is another plus or minus, so expressions with several operations can be managed
     while (tok == T_PLUS || tok == T_MINUS) {
         int op = tok;
+        long op_pos = tok_pos;
         next_token();
         Value right = parse_term();
         if (failed) return left;
+        if(!left.is_float && !right.is_float){
+            if(op == T_PLUS) left.i = left.i + right.i;
+            else left.i = left.i - right.i;
+        }else{
+            double a = to_double(left);
+            double b = to_double(right);
+            double r;
+            if(op == T_PLUS) r = a + b;
+            else r = a - b;
+            if(isnan(r) || isinf(r)){
+                fail(op_pos);
+                return left;
+            }
+            left.is_float = 1;
+            left.f = r;
+        }
 
-         //I check which operator was saved before reading the next number, because next_token changes the current token
-        if (op == T_PLUS) left.i = left.i + right.i;
-        else left.i = left.i - right.i;
+    
     }
     return left;
 }
 
-
+//since for files with a lot of lines, writing to disk on every single line is very slow, i double the buffer out_cap * 2 whenever needed, save results in memory,
+//and write everything to disk at the end in one single call.
 static char *out_text;
 static long out_len;
 static long out_cap;
@@ -292,7 +381,8 @@ static int process_file(const char *in_path, const char *out_dir) {
         if (failed) break;
 
         char text[64];
-        snprintf(text, sizeof text, "%lld\n", v.i);
+        if(v.is_float)  snprintf(text, sizeof text, "%.15g\n", v.f);
+        else snprintf(text, sizeof text, "%lld\n", v.i);
         add_text(text);
     }
 
